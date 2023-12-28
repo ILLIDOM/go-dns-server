@@ -6,8 +6,6 @@ import (
 )
 
 func main() {
-	test()
-
 	fmt.Println("starting UDP server...")
 	udpAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:2053")
 	if err != nil {
@@ -40,6 +38,7 @@ func main() {
 		response.DNSHeader = StaticDNSHeader()
 		response.DNSHeader.Flags |= (1 << 15) // set QR bit to 1 to indicate a DNS reply
 		response.DNSQuestions = []DNSQuestion{*StaticDNSQuestion()}
+		response.DNSAnswers = []DNSAnswer{*StaticDNSAnswer()}
 
 		respBytes := response.Encode()
 
