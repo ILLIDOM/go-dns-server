@@ -30,12 +30,17 @@ func main() {
 			fmt.Println("Error receiving data:", err)
 			break
 		}
+		if size < 12 {
+			fmt.Println("Error DNS header to small:", err)
+		}
 
-		receivedData := string(buf[:size])
-		fmt.Printf("Received %d bytes from %s: %s\n", size, source, receivedData)
+		receivedData := buf[:size]
+		fmt.Printf("Received %d bytes from %s: %s\n", size, source, string(receivedData))
 
-		// Create an empty response
-		response := []byte{}
+		header := NewDNSHeader(buf[:12])
+		header.Flags |= (1 << 15)
+
+		response := header.Encode()
 
 		_, err = udpConn.WriteToUDP(response, source)
 		if err != nil {
