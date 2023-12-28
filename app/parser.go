@@ -1,6 +1,8 @@
 package main
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+)
 
 // some TYPE constants: https://www.rfc-editor.org/rfc/rfc1035#section-3.2.2
 const (
@@ -38,23 +40,53 @@ func (r *DNSReply) Encode() []byte {
 }
 
 type DNSHeader struct {
-	ID uint16 // 16bits -> A random ID assigned to query packets. Response packets must reply with the same ID.
-
-	// Flags contains the 16bit long DNS header flags
-	// QR      uint8  // 1bit -> 1 for a reply packet, 0 for a question packet.
-	// OPCODE  uint8  // 4bit -> Specifies the kind of query in a message.
-	// AA      uint8  // 1bit -> 1 if the responding server "owns" the domain queried, i.e., it's authoritative.
-	// TC      uint8  // 1bit -> 1 if the message is larger than 512 bytes. Always 0 in UDP responses.
-	// RD      uint8  // 1bit -> Sender sets this to 1 if the server should recursively resolve this query, 0 otherwise.
-	// RA      uint8  // 1bit -> Server sets this to 1 to indicate that recursion is available.
-	// Z       uint8  // 3bit -> Used by DNSSEC queries. At inception, it was reserved for future use.
-	// RCODE   uint8  // 4bit -> Response code indicating the status of the response.
-	Flags uint16 // 16bits -> Flags
-
+	ID      uint16 // 16bits -> A random ID assigned to query packets. Response packets must reply with the same ID.
+	Flags   Flags  // 16bits -> Flags
 	QDCOUNT uint16 // 16bit -> Number of questions in the Question section.
 	ANCOUNT uint16 // 16bit -> Number of records in the Answer section.
 	NSCOUNT uint16 // 16bit -> Number of records in the Authority section.
 	ARCOUNT uint16 // 16bit -> Number of records in the Additional section.
+}
+
+type Flags struct {
+	// Flags contains the 16bit long DNS header flags
+	QR     uint16 // 1bit -> 1 for a reply packet, 0 for a question packet.
+	OPCODE uint16 // 4bit -> Specifies the kind of query in a message.
+	AA     uint16 // 1bit -> 1 if the responding server "owns" the domain queried, i.e., it's authoritative.
+	TC     uint16 // 1bit -> 1 if the message is larger than 512 bytes. Always 0 in UDP responses.
+	RD     uint16 // 1bit -> Sender sets this to 1 if the server should recursively resolve this query, 0 otherwise.
+	RA     uint16 // 1bit -> Server sets this to 1 to indicate that recursion is available.
+	Z      uint16 // 3bit -> Used by DNSSEC queries. At inception, it was reserved for future use.
+	RCODE  uint16 // 4bit -> Response code indicating the status of the response.
+}
+
+func (f *Flags) Encode() uint16 {
+	flags := uint16(0)
+	flags |= f.QR << 15
+	flags |= f.OPCODE << 11
+	flags |= f.AA << 10
+	flags |= f.TC << 9
+	flags |= f.RD << 8
+	flags |= f.RA << 7
+	flags |= f.Z << 4
+	flags |= f.RCODE
+	return flags
+}
+
+func DecodeFlags(input uint16) Flags {
+	// flags example binary: 00000001 00100000
+	f := Flags{}
+	f.QR = input >> 15 // get the MSB
+	// OPCODE is obtained by shifting the flags 11 bits to the right and then masking with 0b01111 to get the last four bits
+	f.OPCODE = (input >> 11) & 0b1111
+	f.AA = (input >> 10) & 0b1
+	f.TC = (input >> 9) & 0b1
+	// RD value is extracted by shifting the flags 8 bits to the right and masking with 0b00000001
+	f.RD = (input >> 8) & 0b1
+	f.RA = (input >> 7) & 0b1
+	f.Z = (input >> 4) & 0b1
+	f.RCODE = input & 0b1
+	return f
 }
 
 // Encode returns a 12byte long encoded DNS header
@@ -62,7 +94,7 @@ func (h *DNSHeader) Encode() []byte {
 	buffer := make([]byte, 12)
 	// write header into buffer
 	binary.BigEndian.PutUint16(buffer[0:2], h.ID)
-	binary.BigEndian.PutUint16(buffer[2:4], h.Flags)
+	binary.BigEndian.PutUint16(buffer[2:4], h.Flags.Encode())
 	binary.BigEndian.PutUint16(buffer[4:6], h.QDCOUNT)
 	binary.BigEndian.PutUint16(buffer[6:8], h.ANCOUNT)
 	binary.BigEndian.PutUint16(buffer[8:10], h.NSCOUNT)
@@ -86,11 +118,6 @@ func (q *DNSQuestion) Encode() []byte {
 	offset += TypeSize
 	binary.BigEndian.PutUint16(buf[offset:offset+ClassSize], q.Class)
 	binary.BigEndian.AppendUint16(buf, q.Type)
-
-	// probably not as effective because the content needs to be copied twice
-	// buf := q.Name
-	// buf = binary.BigEndian.AppendUint16(buf, q.Type)
-	// buf = binary.BigEndian.AppendUint16(buf, q.Class)
 
 	return buf
 }
@@ -123,34 +150,37 @@ func (a *DNSAnswer) Encode() []byte {
 	return buf
 }
 
-// StaticDNSHeader returns a static header for testing purposes
-func StaticDNSHeader() *DNSHeader {
-	return &DNSHeader{
-		ID:      1234,
-		Flags:   0,
-		QDCOUNT: 1,
-		ANCOUNT: 1,
-		NSCOUNT: 0,
-		ARCOUNT: 0,
+func NewResponseFlags(flagBits uint16) Flags {
+	receivedFlags := DecodeFlags(flagBits)
+	responseFlags := Flags{
+		QR:     1, // QR is always 1 for a DNS reply
+		OPCODE: receivedFlags.OPCODE,
+		AA:     0,
+		TC:     0,
+		RD:     receivedFlags.RD,
+		RA:     0,
+		Z:      0,
+		RCODE:  0,
 	}
+
+	// if the OPCODE is not 0 (indicating a non-standard query), the RCODE is set to 4, which means "Not Implemented".
+	if receivedFlags.OPCODE != 0 {
+		responseFlags.RCODE = 4
+	}
+
+	return responseFlags
 }
 
 // NewDNSHeader creates a DNS header based on the received header inside the DNS request
-func NewDNSHeader(header []byte) *DNSHeader {
-	id := binary.BigEndian.Uint16(header[0:2])
-	qdcount := binary.BigEndian.Uint16(header[4:6])
-	ancount := binary.BigEndian.Uint16(header[6:8])
-	nscount := binary.BigEndian.Uint16(header[8:10])
-	arcount := binary.BigEndian.Uint16(header[10:12])
-
-	return &DNSHeader{
-		ID:      id,
-		Flags:   0,
-		QDCOUNT: qdcount,
-		ANCOUNT: ancount,
-		NSCOUNT: nscount,
-		ARCOUNT: arcount,
-	}
+func NewDNSHeader(receivedHeader []byte) *DNSHeader {
+	header := &DNSHeader{}
+	header.ID = binary.BigEndian.Uint16(receivedHeader[0:2])
+	header.Flags = NewResponseFlags(binary.BigEndian.Uint16(receivedHeader[2:4]))
+	header.QDCOUNT = binary.BigEndian.Uint16(receivedHeader[4:6])
+	header.ANCOUNT = binary.BigEndian.Uint16(receivedHeader[6:8])
+	header.NSCOUNT = binary.BigEndian.Uint16(receivedHeader[8:10])
+	header.ARCOUNT = binary.BigEndian.Uint16(receivedHeader[10:12])
+	return header
 }
 
 // StaticDNSQuestion returns a static question for testing purpose

@@ -35,10 +35,12 @@ func main() {
 		fmt.Printf("Received %d bytes from %s: %s\n", size, source, string(receivedData))
 
 		response := DNSReply{}
-		response.DNSHeader = StaticDNSHeader()
-		response.DNSHeader.Flags |= (1 << 15) // set QR bit to 1 to indicate a DNS reply
+		response.DNSHeader = NewDNSHeader(receivedData[:12])
 		response.DNSQuestions = []DNSQuestion{*StaticDNSQuestion()}
 		response.DNSAnswers = []DNSAnswer{*StaticDNSAnswer()}
+
+		response.DNSHeader.QDCOUNT = uint16(len(response.DNSQuestions))
+		response.DNSHeader.ANCOUNT = uint16(len(response.DNSAnswers))
 
 		respBytes := response.Encode()
 
