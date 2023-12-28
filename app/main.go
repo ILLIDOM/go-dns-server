@@ -30,19 +30,19 @@ func main() {
 			fmt.Println("Error receiving data:", err)
 			break
 		}
-		if size < 12 {
-			fmt.Println("Error DNS header to small:", err)
-		}
 
 		receivedData := buf[:size]
 		fmt.Printf("Received %d bytes from %s: %s\n", size, source, string(receivedData))
 
-		header := NewDNSHeader(buf[:12])
-		header.Flags |= (1 << 15)
+		response := DNSReply{}
+		response.DNSHeader = StaticDNSHeader()
+		response.DNSHeader.QDCOUNT = 1
+		response.DNSHeader.Flags |= (1 << 15) // set QR bit to 1 to indicate a DNS reply
+		response.DNSQuestions = []DNSQuestion{*StaticDNSQuestion()}
 
-		response := header.Encode()
+		respBytes := response.Encode()
 
-		_, err = udpConn.WriteToUDP(response, source)
+		_, err = udpConn.WriteToUDP(respBytes, source)
 		if err != nil {
 			fmt.Println("Failed to send response:", err)
 		}

@@ -2,8 +2,28 @@ package main
 
 import "encoding/binary"
 
+// some TYPE constants: https://www.rfc-editor.org/rfc/rfc1035#section-3.2.2
+const (
+	A     = 1
+	NS    = 2
+	CNAME = 5
+	PTR   = 12
+	MX    = 15
+	TXT   = 16
+)
+
 type DNSReply struct {
-	DNSHeader []byte // 12bytes
+	DNSHeader    *DNSHeader    // 12bytes
+	DNSQuestions []DNSQuestion // length of DNSQuestion.Name + 4 Bytes (Type and Class) for each question
+}
+
+func (r *DNSReply) Encode() []byte {
+	buf := r.DNSHeader.Encode()
+	for _, dnsQuestion := range r.DNSQuestions {
+		buf = append(buf, dnsQuestion.Encode()...)
+	}
+
+	return buf
 }
 
 type DNSHeader struct {
@@ -26,6 +46,19 @@ type DNSHeader struct {
 	ARCOUNT uint16 // 16bit -> Number of records in the Additional section.
 }
 
+type DNSQuestion struct {
+	Name  []byte
+	Type  uint16
+	Class uint16
+}
+
+func (q *DNSQuestion) Encode() []byte {
+	buf := q.Name
+	binary.BigEndian.AppendUint16(buf, q.Type)
+	binary.BigEndian.AppendUint16(buf, q.Class)
+	return buf
+}
+
 // Encode returns a 12byte long encoded DNS header
 func (h *DNSHeader) Encode() []byte {
 	buffer := make([]byte, 12)
@@ -39,7 +72,8 @@ func (h *DNSHeader) Encode() []byte {
 	return buffer
 }
 
-func NewDNSHeader(header []byte) *DNSHeader {
+// StaticDNSHeader returns a static header for testing purposes
+func StaticDNSHeader() *DNSHeader {
 	return &DNSHeader{
 		ID:      1234,
 		Flags:   0,
@@ -48,4 +82,35 @@ func NewDNSHeader(header []byte) *DNSHeader {
 		NSCOUNT: 0,
 		ARCOUNT: 0,
 	}
+}
+
+// NewDNSHeader creates a DNS header based on the received header inside the DNS request
+func NewDNSHeader(header []byte) *DNSHeader {
+	id := binary.BigEndian.Uint16(header[0:2])
+	qdcount := binary.BigEndian.Uint16(header[4:6])
+	ancount := binary.BigEndian.Uint16(header[6:8])
+	nscount := binary.BigEndian.Uint16(header[8:10])
+	arcount := binary.BigEndian.Uint16(header[10:12])
+
+	return &DNSHeader{
+		ID:      id,
+		Flags:   0,
+		QDCOUNT: qdcount,
+		ANCOUNT: ancount,
+		NSCOUNT: nscount,
+		ARCOUNT: arcount,
+	}
+}
+
+// StaticDNSQuestion returns a static question for testing purpose
+func StaticDNSQuestion() *DNSQuestion {
+	return &DNSQuestion{
+		Name:  []byte("\x0ccodecrafters\x02io\x00"),
+		Type:  1,
+		Class: 1,
+	}
+}
+
+func NewDNSQuestion(body []byte) *DNSQuestion {
+	return &DNSQuestion{}
 }
