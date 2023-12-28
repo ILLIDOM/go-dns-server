@@ -4,12 +4,14 @@ import "encoding/binary"
 
 // some TYPE constants: https://www.rfc-editor.org/rfc/rfc1035#section-3.2.2
 const (
-	A     = 1
-	NS    = 2
-	CNAME = 5
-	PTR   = 12
-	MX    = 15
-	TXT   = 16
+	A         = 1
+	NS        = 2
+	CNAME     = 5
+	PTR       = 12
+	MX        = 15
+	TXT       = 16
+	TypeSize  = 2
+	ClassSize = 2
 )
 
 type DNSReply struct {
@@ -53,9 +55,21 @@ type DNSQuestion struct {
 }
 
 func (q *DNSQuestion) Encode() []byte {
-	buf := q.Name
+	// longer but not that many copies as with append
+	size := len(q.Name) + TypeSize + ClassSize // add the size for the Type and Class fields
+	buf := make([]byte, size)
+	copy(buf, q.Name)
+	offset := len(q.Name)
+	binary.BigEndian.PutUint16(buf[offset:offset+TypeSize], q.Type)
+	offset += TypeSize
+	binary.BigEndian.PutUint16(buf[offset:offset+ClassSize], q.Class)
 	binary.BigEndian.AppendUint16(buf, q.Type)
-	binary.BigEndian.AppendUint16(buf, q.Class)
+
+	// probably not as effective because the content needs to be copied twice
+	// buf := q.Name
+	// buf = binary.BigEndian.AppendUint16(buf, q.Type)
+	// buf = binary.BigEndian.AppendUint16(buf, q.Class)
+
 	return buf
 }
 
@@ -77,7 +91,7 @@ func StaticDNSHeader() *DNSHeader {
 	return &DNSHeader{
 		ID:      1234,
 		Flags:   0,
-		QDCOUNT: 0,
+		QDCOUNT: 1,
 		ANCOUNT: 0,
 		NSCOUNT: 0,
 		ARCOUNT: 0,
@@ -106,7 +120,7 @@ func NewDNSHeader(header []byte) *DNSHeader {
 func StaticDNSQuestion() *DNSQuestion {
 	return &DNSQuestion{
 		Name:  []byte("\x0ccodecrafters\x02io\x00"),
-		Type:  1,
+		Type:  A,
 		Class: 1,
 	}
 }
