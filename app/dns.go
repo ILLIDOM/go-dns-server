@@ -20,14 +20,14 @@ const (
 )
 
 type DNSResponse struct {
-	DNSHeader    *DNSHeader    // 12bytes
-	DNSQuestions []DNSQuestion // length of DNSQuestion.Name + 4 Bytes (Type and Class) for each question
-	DNSAnswers   []DNSAnswer   // length is variable due to the data field
+	DNSHeader    *DNSHeader     // 12bytes
+	DNSQuestions []*DNSQuestion // length of DNSQuestion.Name + 4 Bytes (Type and Class) for each question
+	DNSAnswers   []*DNSAnswer   // length is variable due to the data field
 }
 
 // Encode returns the BigEndian encoded DNSReply as a byte array
 func (r *DNSResponse) Encode() []byte {
-	// improve by creating a fixed size buffer first
+	// TODO: improve by creating a fixed size buffer first
 	buf := r.DNSHeader.Encode()
 	for _, dnsQuestion := range r.DNSQuestions {
 		buf = append(buf, dnsQuestion.Encode()...)
@@ -184,37 +184,74 @@ func NewDNSHeader(receivedHeader []byte) *DNSHeader {
 	return header
 }
 
-// StaticDNSQuestion returns a static question for testing purpose
-func StaticDNSQuestion() *DNSQuestion {
-	return &DNSQuestion{
-		Name:  []byte("\x0ccodecrafters\x02io\x00"),
-		Type:  A,
-		Class: 1,
+func extractName(body []byte, offset *int) []byte {
+	var name []byte
+
+	for {
+		if body[*offset] == NullByte {
+			name = append(name, body[*offset])
+			*offset += 1
+			break
+		}
+
+		if isCompressed(body[*offset]) {
+			pointerOffset := int(binary.BigEndian.Uint16([]byte{body[*offset] & 0x3f, body[*offset+1]}))
+			// decrease pointer offset by the header length because body does not contain the header
+			pointerOffset -= 12
+			name = append(name, extractName(body, &pointerOffset)...)
+			// skip the two pointer bytes
+			*offset += 2
+			break
+		}
+
+		// first byte indicates the lenght of the following label
+		length := int(body[*offset])
+		// append the length to the name slice
+		name = append(name, body[*offset])
+		// proceed to the first data byte
+		*offset++
+		// extract the label
+		label := body[*offset : *offset+length]
+		// append the label to the name slice
+		name = append(name, label...)
+		// proceed to the next length or NullByte
+		*offset += length
 	}
+
+	return name
 }
 
-func NewDNSQuestion(body []byte) *DNSQuestion {
-	// TODO: parse multiple questions
-
-	// find the end of the domain name indicated by the null byte 0x00
-	l := 0
-	for body[l] != NullByte {
-		l += 1
-	}
-
-	name := body[0 : l+1]
-	typeField := binary.BigEndian.Uint16(body[l+1 : l+3])
-	classField := binary.BigEndian.Uint16(body[l+3 : l+5])
-
-	return &DNSQuestion{
-		Name:  name,
-		Type:  typeField,
-		Class: classField,
-	}
+func isCompressed(b byte) bool {
+	// shift bits 6 times to the right and check if the two bits are set to 1 (11 = 3)
+	return (b >> 6) == 3
 }
 
-func NewDNSAnswers(questions []DNSQuestion) []DNSAnswer {
-	answers := []DNSAnswer{}
+func NewDNSQuestions(body []byte, numberOfQuestions uint16) []*DNSQuestion {
+	questions := []*DNSQuestion{}
+	offset := 0 // offset is 0 because the body does not contain the 12 header bytes
+	// extract the names from the body
+	for i := 0; i < int(numberOfQuestions); i++ {
+		name := extractName(body, &offset)
+
+		dnsType := binary.BigEndian.Uint16(body[offset : offset+2])
+		dnsClass := binary.BigEndian.Uint16(body[offset+2 : offset+4])
+
+		offset += 4
+
+		q := &DNSQuestion{
+			Name:  name,
+			Type:  dnsType,
+			Class: dnsClass,
+		}
+
+		questions = append(questions, q)
+	}
+
+	return questions
+}
+
+func NewDNSAnswers(questions []*DNSQuestion) []*DNSAnswer {
+	answers := []*DNSAnswer{}
 
 	for _, q := range questions {
 		a := &DNSAnswer{
@@ -222,10 +259,10 @@ func NewDNSAnswers(questions []DNSQuestion) []DNSAnswer {
 			Type:     q.Type,
 			Class:    q.Class,
 			TTL:      60,
-			RDLENGTH: 4, // only A record which have a length of 4
-			RDATA:    []byte("\x08\x08\x08\x08"),
+			RDLENGTH: 4,                          // only A records which have a length of 4
+			RDATA:    []byte("\x08\x08\x08\x08"), // static IP but should be looked up inside the DNS zone file
 		}
-		answers = append(answers, *a)
+		answers = append(answers, a)
 	}
 
 	return answers

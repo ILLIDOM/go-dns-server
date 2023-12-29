@@ -36,7 +36,7 @@ func main() {
 
 		response := DNSResponse{}
 		response.DNSHeader = NewDNSHeader(receivedData[:12])
-		response.DNSQuestions = []DNSQuestion{*NewDNSQuestion(receivedData[12:])}
+		response.DNSQuestions = NewDNSQuestions(receivedData[12:], response.DNSHeader.QDCOUNT)
 		response.DNSAnswers = NewDNSAnswers(response.DNSQuestions)
 		response.DNSHeader.QDCOUNT = uint16(len(response.DNSQuestions))
 		response.DNSHeader.ANCOUNT = uint16(len(response.DNSAnswers))
