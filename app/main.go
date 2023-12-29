@@ -34,11 +34,10 @@ func main() {
 		receivedData := buf[:size]
 		fmt.Printf("Received %d bytes from %s: %s\n", size, source, string(receivedData))
 
-		response := DNSReply{}
+		response := DNSResponse{}
 		response.DNSHeader = NewDNSHeader(receivedData[:12])
-		response.DNSQuestions = []DNSQuestion{*StaticDNSQuestion()}
-		response.DNSAnswers = []DNSAnswer{*StaticDNSAnswer()}
-
+		response.DNSQuestions = []DNSQuestion{*NewDNSQuestion(receivedData[12:])}
+		response.DNSAnswers = NewDNSAnswers(response.DNSQuestions)
 		response.DNSHeader.QDCOUNT = uint16(len(response.DNSQuestions))
 		response.DNSHeader.ANCOUNT = uint16(len(response.DNSAnswers))
 

@@ -16,16 +16,17 @@ const (
 	ClassSize    = 2
 	TTLSize      = 4
 	RDLengthSize = 2
+	NullByte     = byte(0x00)
 )
 
-type DNSReply struct {
+type DNSResponse struct {
 	DNSHeader    *DNSHeader    // 12bytes
 	DNSQuestions []DNSQuestion // length of DNSQuestion.Name + 4 Bytes (Type and Class) for each question
 	DNSAnswers   []DNSAnswer   // length is variable due to the data field
 }
 
 // Encode returns the BigEndian encoded DNSReply as a byte array
-func (r *DNSReply) Encode() []byte {
+func (r *DNSResponse) Encode() []byte {
 	// improve by creating a fixed size buffer first
 	buf := r.DNSHeader.Encode()
 	for _, dnsQuestion := range r.DNSQuestions {
@@ -193,7 +194,41 @@ func StaticDNSQuestion() *DNSQuestion {
 }
 
 func NewDNSQuestion(body []byte) *DNSQuestion {
-	return &DNSQuestion{}
+	// TODO: parse multiple questions
+
+	// find the end of the domain name indicated by the null byte 0x00
+	l := 0
+	for body[l] != NullByte {
+		l += 1
+	}
+
+	name := body[0 : l+1]
+	typeField := binary.BigEndian.Uint16(body[l+1 : l+3])
+	classField := binary.BigEndian.Uint16(body[l+3 : l+5])
+
+	return &DNSQuestion{
+		Name:  name,
+		Type:  typeField,
+		Class: classField,
+	}
+}
+
+func NewDNSAnswers(questions []DNSQuestion) []DNSAnswer {
+	answers := []DNSAnswer{}
+
+	for _, q := range questions {
+		a := &DNSAnswer{
+			Name:     q.Name,
+			Type:     q.Type,
+			Class:    q.Class,
+			TTL:      60,
+			RDLENGTH: 4, // only A record which have a length of 4
+			RDATA:    []byte("\x08\x08\x08\x08"),
+		}
+		answers = append(answers, *a)
+	}
+
+	return answers
 }
 
 func StaticDNSAnswer() *DNSAnswer {
