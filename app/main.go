@@ -1,11 +1,19 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"net"
 )
 
 func main() {
+	// get --resolver argument as flag
+	var resolverArg string
+	flag.StringVar(&resolverArg, "resolver", "8.8.8.8:53", "ip:port of the DNS server requests are forwarded to")
+	flag.Parse()
+
+	fmt.Printf("resolver is set to: %s\n", resolverArg)
+
 	fmt.Println("starting UDP server...")
 	udpAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:2053")
 	if err != nil {
@@ -24,6 +32,9 @@ func main() {
 
 	buf := make([]byte, 512)
 
+	// create a DNS resolver
+	resolver := NewResolver(resolverArg)
+
 	for {
 		size, source, err := udpConn.ReadFromUDP(buf)
 		if err != nil {
@@ -34,13 +45,18 @@ func main() {
 		receivedData := buf[:size]
 		fmt.Printf("Received %d bytes from %s: %s\n", size, source, string(receivedData))
 
-		response := DNSResponse{}
-		response.DNSHeader = NewDNSHeader(receivedData[:12])
-		response.DNSQuestions = NewDNSQuestions(receivedData[12:], response.DNSHeader.QDCOUNT)
-		response.DNSAnswers = NewDNSAnswers(response.DNSQuestions)
-		response.DNSHeader.QDCOUNT = uint16(len(response.DNSQuestions))
-		response.DNSHeader.ANCOUNT = uint16(len(response.DNSAnswers))
+		// parse the original message
+		message := &DNSMessage{}
+		message.Decode(receivedData)
 
+		fmt.Printf("using resolver: %s\n", resolverArg)
+		// resolve the dns query
+		response, err := resolver.Resolve(message)
+		if err != nil {
+			fmt.Printf("error creating response: %v\n", err)
+		}
+
+		// encode the dns response to bytes
 		respBytes := response.Encode()
 
 		_, err = udpConn.WriteToUDP(respBytes, source)

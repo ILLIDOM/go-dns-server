@@ -19,28 +19,38 @@ const (
 	NullByte     = byte(0x00)
 )
 
-type DNSResponse struct {
-	DNSHeader    *DNSHeader     // 12bytes
-	DNSQuestions []*DNSQuestion // length of DNSQuestion.Name + 4 Bytes (Type and Class) for each question
-	DNSAnswers   []*DNSAnswer   // length is variable due to the data field
+type DNSMessage struct {
+	Header    *Header     // 12bytes
+	Questions []*Question // length of DNSQuestion.Name + 4 Bytes (Type and Class) for each question
+	Answers   []*Answer   // length is variable due to the data field
+}
+
+// Decode returns a DNSMessage with the Header, Questions and Answers
+func (m *DNSMessage) Decode(data []byte) *DNSMessage {
+	header := ParseHeader(data[:12])
+	m.Header = header
+	questions, i := ParseQuestions(data[12:], header.QDCOUNT)
+	m.Questions = questions
+	m.Answers = ParseAnswers(data[12:], i, int(header.ANCOUNT))
+	return m
 }
 
 // Encode returns the BigEndian encoded DNSReply as a byte array
-func (r *DNSResponse) Encode() []byte {
+func (r *DNSMessage) Encode() []byte {
 	// TODO: improve by creating a fixed size buffer first
-	buf := r.DNSHeader.Encode()
-	for _, dnsQuestion := range r.DNSQuestions {
+	buf := r.Header.Encode()
+	for _, dnsQuestion := range r.Questions {
 		buf = append(buf, dnsQuestion.Encode()...)
 	}
 
-	for _, dnsAnswer := range r.DNSAnswers {
+	for _, dnsAnswer := range r.Answers {
 		buf = append(buf, dnsAnswer.Encode()...)
 	}
 
 	return buf
 }
 
-type DNSHeader struct {
+type Header struct {
 	ID      uint16 // 16bits -> A random ID assigned to query packets. Response packets must reply with the same ID.
 	Flags   Flags  // 16bits -> Flags
 	QDCOUNT uint16 // 16bit -> Number of questions in the Question section.
@@ -91,7 +101,7 @@ func DecodeFlags(input uint16) Flags {
 }
 
 // Encode returns a 12byte long encoded DNS header
-func (h *DNSHeader) Encode() []byte {
+func (h *Header) Encode() []byte {
 	buffer := make([]byte, 12)
 	// write header into buffer
 	binary.BigEndian.PutUint16(buffer[0:2], h.ID)
@@ -103,13 +113,13 @@ func (h *DNSHeader) Encode() []byte {
 	return buffer
 }
 
-type DNSQuestion struct {
+type Question struct {
 	Name  []byte // The domain name encoded as a sequence of labels.
 	Type  uint16 // The query type according to: https://www.rfc-editor.org/rfc/rfc1035#section-3.2.2
 	Class uint16 // The class according to: https://www.rfc-editor.org/rfc/rfc1035#section-3.2.4
 }
 
-func (q *DNSQuestion) Encode() []byte {
+func (q *Question) Encode() []byte {
 	// longer but not that many copies as with append
 	size := len(q.Name) + TypeSize + ClassSize // add the size for the Type and Class fields
 	buf := make([]byte, size)
@@ -123,7 +133,7 @@ func (q *DNSQuestion) Encode() []byte {
 	return buf
 }
 
-type DNSAnswer struct {
+type Answer struct {
 	Name     []byte // The domain name encoded as a sequence of labels.
 	Type     uint16 // The query type according to: https://www.rfc-editor.org/rfc/rfc1035#section-3.2.2
 	Class    uint16 // The class according to: https://www.rfc-editor.org/rfc/rfc1035#section-3.2.4
@@ -132,7 +142,7 @@ type DNSAnswer struct {
 	RDATA    []byte // Data specific to the record type.
 }
 
-func (a *DNSAnswer) Encode() []byte {
+func (a *Answer) Encode() []byte {
 	// add the size for the different fields
 	size := len(a.Name) + TypeSize + ClassSize + TTLSize + RDLengthSize + int(a.RDLENGTH)
 	buf := make([]byte, size)
@@ -172,18 +182,26 @@ func NewResponseFlags(flagBits uint16) Flags {
 	return responseFlags
 }
 
-// NewDNSHeader creates a DNS header based on the received header inside the DNS request
-func NewDNSHeader(receivedHeader []byte) *DNSHeader {
-	header := &DNSHeader{}
-	header.ID = binary.BigEndian.Uint16(receivedHeader[0:2])
-	header.Flags = NewResponseFlags(binary.BigEndian.Uint16(receivedHeader[2:4]))
-	header.QDCOUNT = binary.BigEndian.Uint16(receivedHeader[4:6])
-	header.ANCOUNT = binary.BigEndian.Uint16(receivedHeader[6:8])
-	header.NSCOUNT = binary.BigEndian.Uint16(receivedHeader[8:10])
-	header.ARCOUNT = binary.BigEndian.Uint16(receivedHeader[10:12])
+// ParseHeader returns the parsed DNS header (first 12 bytes)
+func ParseHeader(headerData []byte) *Header {
+	header := &Header{}
+	header.ID = binary.BigEndian.Uint16(headerData[0:2])
+	header.Flags = DecodeFlags(binary.BigEndian.Uint16(headerData[2:4]))
+	header.QDCOUNT = binary.BigEndian.Uint16(headerData[4:6])
+	header.ANCOUNT = binary.BigEndian.Uint16(headerData[6:8])
+	header.NSCOUNT = binary.BigEndian.Uint16(headerData[8:10])
+	header.ARCOUNT = binary.BigEndian.Uint16(headerData[10:12])
 	return header
 }
 
+// NewResponseHeader creates a DNS header with the flags set for a DNS response header
+func NewResponseHeader(receivedHeader []byte) *Header {
+	header := ParseHeader(receivedHeader)
+	header.Flags = NewResponseFlags(binary.BigEndian.Uint16(receivedHeader[2:4]))
+	return header
+}
+
+// extractName extracts the domain names according to: https://www.rfc-editor.org/rfc/rfc1035#section-4.1.4
 func extractName(body []byte, offset *int) []byte {
 	var name []byte
 
@@ -226,8 +244,9 @@ func isCompressed(b byte) bool {
 	return (b >> 6) == 3
 }
 
-func NewDNSQuestions(body []byte, numberOfQuestions uint16) []*DNSQuestion {
-	questions := []*DNSQuestion{}
+// ParseQuestions returns DNS questions - the provided body must not contain the header bytes
+func ParseQuestions(body []byte, numberOfQuestions uint16) ([]*Question, int) {
+	questions := []*Question{}
 	offset := 0 // offset is 0 because the body does not contain the 12 header bytes
 	// extract the names from the body
 	for i := 0; i < int(numberOfQuestions); i++ {
@@ -238,7 +257,7 @@ func NewDNSQuestions(body []byte, numberOfQuestions uint16) []*DNSQuestion {
 
 		offset += 4
 
-		q := &DNSQuestion{
+		q := &Question{
 			Name:  name,
 			Type:  dnsType,
 			Class: dnsClass,
@@ -247,14 +266,40 @@ func NewDNSQuestions(body []byte, numberOfQuestions uint16) []*DNSQuestion {
 		questions = append(questions, q)
 	}
 
-	return questions
+	return questions, offset
 }
 
-func NewDNSAnswers(questions []*DNSQuestion) []*DNSAnswer {
-	answers := []*DNSAnswer{}
+func ParseAnswers(data []byte, pointer int, numberOfAnswers int) []*Answer {
+	var answers []*Answer
+
+	offset := &pointer
+	for i := 0; i < numberOfAnswers; i++ {
+		// can also be a compressed name inside the answer section
+		answer := &Answer{}
+		name := extractName(data, offset)
+		answer.Name = name
+		answer.Type = binary.BigEndian.Uint16(data[*offset : *offset+2])
+		*offset += 2
+		answer.Class = binary.BigEndian.Uint16(data[*offset : *offset+2])
+		*offset += 2
+		answer.TTL = binary.BigEndian.Uint32(data[*offset : *offset+4])
+		*offset += 4
+		answer.RDLENGTH = binary.BigEndian.Uint16(data[*offset : *offset+2])
+		*offset += 2
+		answer.RDATA = data[pointer : pointer+int(answer.RDLENGTH)]
+		*offset += int(answer.RDLENGTH)
+
+		answers = append(answers, answer)
+	}
+
+	return answers
+}
+
+func CreateDNSAnswers(questions []*Question) []*Answer {
+	answers := []*Answer{}
 
 	for _, q := range questions {
-		a := &DNSAnswer{
+		a := &Answer{
 			Name:     q.Name,
 			Type:     q.Type,
 			Class:    q.Class,
@@ -268,8 +313,8 @@ func NewDNSAnswers(questions []*DNSQuestion) []*DNSAnswer {
 	return answers
 }
 
-func StaticDNSAnswer() *DNSAnswer {
-	return &DNSAnswer{
+func StaticDNSAnswer() *Answer {
+	return &Answer{
 		Name:     []byte("\x0ccodecrafters\x02io\x00"),
 		Type:     A,
 		Class:    1,
